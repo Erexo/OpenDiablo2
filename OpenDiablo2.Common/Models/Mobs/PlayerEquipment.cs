@@ -31,16 +31,7 @@ namespace OpenDiablo2.Common.Models.Mobs
                 else if (RightArm?.Item is Weapon)
                     return ((Weapon)RightArm.Item).WeaponClass.ToWeaponClass();
                 else
-                    return eWeaponClass.None;
-            }
-        }
-
-        public eArmorType ArmorType
-        {
-            get
-            {
-                // TODO: Make things happen here
-                return eArmorType.Lite;
+                    return eWeaponClass.HandToHand;
             }
         }
 

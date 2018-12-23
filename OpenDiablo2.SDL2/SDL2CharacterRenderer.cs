@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using OpenDiablo2.Common;
 using OpenDiablo2.Common.Enums;
@@ -34,6 +35,7 @@ namespace OpenDiablo2.SDL2_
         {
             public int Direction { get; set; }
             public eMobMode MobMode { get; set; }
+            public string EquipmentHash { get; set; }
 
             public SDL.SDL_Rect[] SpriteRect { get; set; }
             public IntPtr[] SpriteTexture { get; set; }
@@ -44,12 +46,28 @@ namespace OpenDiablo2.SDL2_
         static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         public Guid UID { get; set; }
-        public PlayerLocationDetails LocationDetails { get; set; }
-        public eHero Hero { get; set; }
-        public PlayerEquipment Equipment { get; set; }
-        public eMobMode MobMode { get; set; }
         public string ShieldCode { get; set; }
         public string WeaponCode { get; set; }
+
+        private PlayerInfo currentPlayer = null;
+        private PlayerInfo GetThisMob()
+        {
+            if (currentPlayer == null)
+                currentPlayer = gameState.PlayerInfos.First(x => x.UID == UID);
+            return currentPlayer;
+        }
+
+
+        private eMobMode MobMode
+        {
+            get => GetThisMob().MobMode;
+            set => GetThisMob().MobMode = value;
+        }
+        private IMobLocation MobLocation => GetThisMob();
+        private eHero Hero => GetThisMob().Hero;
+        private PlayerEquipment Equipment => GetThisMob().Equipment;
+
+
 
         private readonly IntPtr renderer;
 
@@ -60,16 +78,21 @@ namespace OpenDiablo2.SDL2_
 
         private readonly IResourceManager resourceManager;
         private readonly IPaletteProvider paletteProvider;
+        private readonly IGameState gameState;
+        private int lastDirection = -1;
+        private eMovementType lastMovementType = eMovementType.Stopped;
+        private string lastEquipmentHash = string.Empty;
 
         private MPQCOF animationData;
 
         static readonly byte[] directionConversion = new byte[] { 3, 15, 4, 8, 0, 9, 5, 10, 1, 11, 6, 12, 2, 13, 7, 14 };
 
-        public SDL2CharacterRenderer(IntPtr renderer, IResourceManager resourceManager, IPaletteProvider paletteProvider)
+        public SDL2CharacterRenderer(IntPtr renderer, IResourceManager resourceManager, IPaletteProvider paletteProvider, IGameState gameState)
         {
             this.resourceManager = resourceManager;
             this.paletteProvider = paletteProvider;
             this.renderer = renderer;
+            this.gameState = gameState;
         }
 
         public void Render(int pixelOffsetX, int pixelOffsetY)
@@ -93,6 +116,15 @@ namespace OpenDiablo2.SDL2_
             if (currentDirectionCache == null)
                 return;
 
+
+            if ((lastDirection != MobLocation.MovementDirection) || (lastMovementType != MobLocation.MovementType) || (lastEquipmentHash != Equipment.HashKey))
+            {
+                lastMovementType = MobLocation.MovementType;
+                lastDirection = MobLocation.MovementDirection;
+                lastEquipmentHash = Equipment.HashKey;
+                ResetAnimationData();
+            }
+
             seconds += ms / 1000f;
             var animationSeg = 15f / currentDirectionCache.AnimationSpeed;
             while (seconds >= animationSeg)
@@ -109,10 +141,16 @@ namespace OpenDiablo2.SDL2_
 
         }
 
+        public void ResetCache()
+        {
+            directionCache.Clear();
+        }
+
         public void ResetAnimationData()
         {
+
             var lastMobMode = MobMode;
-            switch (LocationDetails.MovementType)
+            switch (MobLocation.MovementType)
             {
                 case eMovementType.Stopped:
                     MobMode = eMobMode.PlayerTownNeutral;
@@ -130,7 +168,8 @@ namespace OpenDiablo2.SDL2_
             if (lastMobMode != MobMode)
                 renderFrameIndex = 0;
 
-            currentDirectionCache = directionCache.FirstOrDefault(x => x.MobMode == MobMode && x.Direction == directionConversion[LocationDetails.MovementDirection]);
+            currentDirectionCache = directionCache.FirstOrDefault(x => x.MobMode == MobMode && x.Direction == directionConversion[MobLocation.MovementDirection] && x.EquipmentHash == Equipment.HashKey);
+
             if (currentDirectionCache != null)
                 return;
 
@@ -147,9 +186,9 @@ namespace OpenDiablo2.SDL2_
             var directionCache = new DirectionCacheItem
             {
                 MobMode = MobMode,
-                Direction = directionConversion[LocationDetails.MovementDirection]
+                Direction = directionConversion[MobLocation.MovementDirection]
             };
-
+          
             var palette = paletteProvider.PaletteTable[Palettes.Units];
 
             var dirAnimation = animationData.Animations[0];
@@ -170,10 +209,10 @@ namespace OpenDiablo2.SDL2_
                     continue;
                 }
 
-                minX = Math.Min(minX, layer.Directions[directionConversion[LocationDetails.MovementDirection]].Box.Left);
-                minY = Math.Min(minY, layer.Directions[directionConversion[LocationDetails.MovementDirection]].Box.Top);
-                maxX = Math.Max(maxX, layer.Directions[directionConversion[LocationDetails.MovementDirection]].Box.Right);
-                maxY = Math.Max(maxY, layer.Directions[directionConversion[LocationDetails.MovementDirection]].Box.Bottom);
+                minX = Math.Min(minX, layer.Directions[directionConversion[MobLocation.MovementDirection]].Box.Left);
+                minY = Math.Min(minY, layer.Directions[directionConversion[MobLocation.MovementDirection]].Box.Top);
+                maxX = Math.Max(maxX, layer.Directions[directionConversion[MobLocation.MovementDirection]].Box.Right);
+                maxY = Math.Max(maxY, layer.Directions[directionConversion[MobLocation.MovementDirection]].Box.Bottom);
             }
 
             if (layersIgnored > 0)
@@ -192,7 +231,7 @@ namespace OpenDiablo2.SDL2_
                 SDL.SDL_LockTexture(texture, IntPtr.Zero, out var pixels, out var pitch);
                 var data = (UInt32*)pixels;
 
-                var priorityBase = (directionConversion[LocationDetails.MovementDirection] * animationData.FramesPerDirection * animationData.NumberOfLayers)
+                var priorityBase = (directionConversion[MobLocation.MovementDirection] * animationData.FramesPerDirection * animationData.NumberOfLayers)
                         + (frameIndex * animationData.NumberOfLayers);
                 for (var i = 0; i < animationData.NumberOfLayers; i++)
                 {
@@ -205,7 +244,7 @@ namespace OpenDiablo2.SDL2_
                     if (layer == null)
                         continue; // TODO: This is most likely not ok
 
-                    var direction = layer.Directions[directionConversion[LocationDetails.MovementDirection]];
+                    var direction = layer.Directions[directionConversion[MobLocation.MovementDirection]];
                     var frame = direction.Frames[frameIndex];
 
 
@@ -234,7 +273,7 @@ namespace OpenDiablo2.SDL2_
 
                 directionCache.SpriteTexture[frameIndex] = texture;
                 directionCache.SpriteRect[frameIndex] = new SDL.SDL_Rect { x = minX, y = minY, w = frameW, h = frameH };
-
+                directionCache.EquipmentHash = Equipment.HashKey;
                 this.directionCache.Add(directionCache);
             }
 
